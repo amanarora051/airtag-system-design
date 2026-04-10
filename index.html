@@ -1,0 +1,652 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirTag System Design — Software Architecture</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent2: #3fb950;
+            --accent3: #d29922;
+            --accent4: #f85149;
+            --accent5: #bc8cff;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 24px;
+        }
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+            background: linear-gradient(90deg, var(--accent), var(--accent5));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 24px; }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0;
+            flex-wrap: wrap;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text); background: var(--surface); }
+        .tab.active {
+            color: var(--accent);
+            background: var(--surface);
+            border-color: var(--border);
+        }
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        /* Architecture Diagram */
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+        @media (min-width: 768px) {
+            .arch-grid { grid-template-columns: 1fr 1fr; }
+            .arch-grid .full-width { grid-column: 1 / -1; }
+        }
+        .layer-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .layer-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+        }
+        .layer-card.device::before { background: var(--accent); }
+        .layer-card.network::before { background: var(--accent2); }
+        .layer-card.cloud::before { background: var(--accent3); }
+        .layer-card.client::before { background: var(--accent5); }
+        .layer-card.security::before { background: var(--accent4); }
+
+        .layer-tag {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .tag-device { background: rgba(88,166,255,0.15); color: var(--accent); }
+        .tag-network { background: rgba(63,185,80,0.15); color: var(--accent2); }
+        .tag-cloud { background: rgba(210,153,34,0.15); color: var(--accent3); }
+        .tag-client { background: rgba(188,140,255,0.15); color: var(--accent5); }
+        .tag-security { background: rgba(248,81,73,0.15); color: var(--accent4); }
+
+        .layer-card h3 { font-size: 1.1rem; margin-bottom: 8px; }
+        .layer-card p { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px; }
+        .component-list { list-style: none; }
+        .component-list li {
+            font-size: 0.85rem;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(48,54,61,0.5);
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .component-list li:last-child { border-bottom: none; }
+        .component-list .icon { font-size: 1rem; flex-shrink: 0; }
+
+        /* Flow Diagram */
+        .flow-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            align-items: center;
+        }
+        .flow-step {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 24px;
+            width: 100%;
+            max-width: 700px;
+            position: relative;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.15s;
+        }
+        .flow-step:hover {
+            border-color: var(--accent);
+            transform: translateX(4px);
+        }
+        .flow-step .step-num {
+            position: absolute;
+            top: -12px; left: 20px;
+            background: var(--accent);
+            color: var(--bg);
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.75rem; font-weight: 700;
+        }
+        .flow-step h4 { font-size: 1rem; margin-bottom: 4px; }
+        .flow-step .detail { font-size: 0.82rem; color: var(--text-muted); display: none; margin-top: 8px; }
+        .flow-step.expanded .detail { display: block; }
+        .flow-arrow {
+            width: 2px;
+            height: 28px;
+            background: var(--border);
+            position: relative;
+        }
+        .flow-arrow::after {
+            content: '▼';
+            position: absolute;
+            bottom: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: var(--border);
+            font-size: 0.6rem;
+        }
+
+        /* Crypto */
+        .crypto-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .crypto-block h4 { color: var(--accent4); margin-bottom: 8px; }
+        .crypto-block code {
+            display: block;
+            background: var(--bg);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            color: var(--accent2);
+            overflow-x: auto;
+            margin: 8px 0;
+            border: 1px solid var(--border);
+        }
+        .crypto-block p { font-size: 0.85rem; color: var(--text-muted); }
+
+        /* Analogies Table */
+        .analogy-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        .analogy-table th, .analogy-table td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        .analogy-table th {
+            color: var(--accent);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .analogy-table tr:hover td { background: rgba(88,166,255,0.04); }
+
+        /* State Machine */
+        .state-machine { display: flex; flex-direction: column; gap: 12px; }
+        .state-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 18px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .state-row:hover { border-color: var(--accent); }
+        .state-dot {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .state-row .state-name { font-weight: 600; font-size: 0.95rem; }
+        .state-row .state-desc { font-size: 0.82rem; color: var(--text-muted); }
+        .state-transition { font-size: 0.75rem; color: var(--text-muted); text-align: center; }
+
+        .note-box {
+            background: rgba(88,166,255,0.08);
+            border-left: 3px solid var(--accent);
+            padding: 12px 16px;
+            border-radius: 0 8px 8px 0;
+            margin-top: 16px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        .note-box strong { color: var(--text); }
+
+        @media print {
+            body { background: #fff; color: #1a1a1a; }
+            .layer-card, .flow-step, .crypto-block, .state-row { 
+                border-color: #ccc; background: #f8f8f8; 
+            }
+            .tab { display: none; }
+            .panel { display: block !important; page-break-inside: avoid; margin-bottom: 32px; }
+        }
+    </style>
+</head>
+<body>
+    <h1>AirTag System Design — Software Architecture</h1>
+    <p class="subtitle">Apple's distributed location tracking system, mapped to software engineering primitives</p>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('arch')">Architecture Layers</div>
+        <div class="tab" onclick="switchTab('flow')">Data Flow</div>
+        <div class="tab" onclick="switchTab('crypto')">Crypto Protocol</div>
+        <div class="tab" onclick="switchTab('state')">State Machine</div>
+        <div class="tab" onclick="switchTab('analogy')">SW Analogies</div>
+    </div>
+
+    <!-- ARCHITECTURE LAYERS -->
+    <div id="arch" class="panel active">
+        <div class="arch-grid">
+            <div class="layer-card device">
+                <span class="layer-tag tag-device">Layer 1 — Edge Device (AirTag)</span>
+                <h3>🏷️ IoT Beacon / Producer</h3>
+                <p>Stateless, ultra-low-power edge node. Think of it as a lightweight microservice that only broadcasts events.</p>
+                <ul class="component-list">
+                    <li><span class="icon">📡</span> <span><strong>BLE Beacon Publisher</strong> — Broadcasts rotating EC P-224 public key every 2s (ADV_IND packets, 31 bytes)</span></li>
+                    <li><span class="icon">🎯</span> <span><strong>UWB Ranging Service</strong> — Time-of-flight distance measurement via Apple U1/U2 chip (~60ms pulse interval)</span></li>
+                    <li><span class="icon">📱</span> <span><strong>NFC Tag (Read-Only)</strong> — MIFARE Plus Type 4 tag serving a URL for Lost Mode identification</span></li>
+                    <li><span class="icon">🔑</span> <span><strong>Key Rotation Scheduler</strong> — Derives new key pair via KDF every ~15 min; full address rotation daily at 04:00</span></li>
+                    <li><span class="icon">📐</span> <span><strong>Accelerometer Polling</strong> — Samples every 10s (idle) or 0.5s (motion detected) for Lost Mode triggers</span></li>
+                    <li><span class="icon">🔊</span> <span><strong>Audio Alert DAC</strong> — Drives speaker coil (~8mA); plays sound on remote command or lost-mode motion</span></li>
+                </ul>
+            </div>
+
+            <div class="layer-card network">
+                <span class="layer-tag tag-network">Layer 2 — Mesh Network (Find My)</span>
+                <h3>🌐 Distributed Sensor / Relay Network</h3>
+                <p>~1 billion Apple devices act as anonymous relay nodes. Analogous to a massive event-driven pub/sub mesh.</p>
+                <ul class="component-list">
+                    <li><span class="icon">📶</span> <span><strong>BLE Scanner (Background)</strong> — Every iPhone/iPad/Mac passively scans for FindMy beacon payloads</span></li>
+                    <li><span class="icon">📍</span> <span><strong>Location Sampler</strong> — Captures finder's own GPS/Wi-Fi position upon beacon detection</span></li>
+                    <li><span class="icon">🔐</span> <span><strong>Encrypt-and-Relay Agent</strong> — Encrypts location with AirTag's broadcast public key Pᵢ (ECIES), then relays encrypted blob upstream</span></li>
+                    <li><span class="icon">👤</span> <span><strong>Zero-Knowledge Identity</strong> — No auth headers, no user IDs, no logs. Finder is 100% anonymous to Apple</span></li>
+                    <li><span class="icon">⚡</span> <span><strong>Efficiency Guarantee</strong> — Uses &lt;1KB per detection; piggybacks on existing network connections</span></li>
+                </ul>
+            </div>
+
+            <div class="layer-card cloud full-width">
+                <span class="layer-tag tag-cloud">Layer 3 — Cloud Backend (Apple iCloud)</span>
+                <h3>☁️ Blind Relay / Encrypted Blob Store</h3>
+                <p>Apple's servers are a "dumb pipe" — they store and forward encrypted location blobs but <strong>cannot decrypt them</strong>. Zero-knowledge architecture.</p>
+                <ul class="component-list">
+                    <li><span class="icon">📦</span> <span><strong>Encrypted Location Store</strong> — Key-value store keyed by hashed public key identifiers; values are E2E-encrypted location blobs</span></li>
+                    <li><span class="icon">🔀</span> <span><strong>Anonymous Proxy/Relay</strong> — All queries go through proxy servers that strip requester identity</span></li>
+                    <li><span class="icon">📨</span> <span><strong>Push Notification Service (APNs)</strong> — Triggers owner's device when new location reports arrive or Lost Mode AirTag is detected</span></li>
+                    <li><span class="icon">🔗</span> <span><strong>NFC URL Resolver</strong> — found.apple.com endpoint that resolves AirTag serial/public identity → owner's Lost Mode message</span></li>
+                    <li><span class="icon">🛡️</span> <span><strong>Anti-Stalking Detection</strong> — Distributed threat detection: alerts iPhone users if an unknown AirTag is moving with them</span></li>
+                </ul>
+            </div>
+
+            <div class="layer-card client">
+                <span class="layer-tag tag-client">Layer 4 — Client App (Find My)</span>
+                <h3>📱 Owner's Decryption & UI Client</h3>
+                <p>The only entity that holds the private key. All decryption and rendering happens on-device.</p>
+                <ul class="component-list">
+                    <li><span class="icon">🗝️</span> <span><strong>Private Key Store</strong> — Root key pair synced via iCloud Keychain (E2E encrypted); derives all past/future keys locally</span></li>
+                    <li><span class="icon">📊</span> <span><strong>Location Decryptor</strong> — Fetches encrypted blobs from iCloud, decrypts with derived private key dᵢ → GPS coordinates</span></li>
+                    <li><span class="icon">🗺️</span> <span><strong>Map Renderer</strong> — Plots AirTag location history on Apple Maps with timestamps</span></li>
+                    <li><span class="icon">🧭</span> <span><strong>Precision Finding UI</strong> — On-device ML fuses UWB distance + IMU (accel/gyro) data → real-time directional arrow + haptics</span></li>
+                    <li><span class="icon">🔔</span> <span><strong>Alert Engine</strong> — "Left Behind" geofence alerts, "Unknown AirTag" stalking alerts, battery-low notifications</span></li>
+                </ul>
+            </div>
+
+            <div class="layer-card security">
+                <span class="layer-tag tag-security">Cross-Cutting — Security & Privacy</span>
+                <h3>🔒 Privacy-by-Design Guarantees</h3>
+                <p>Privacy isn't an add-on; it's a hard architectural constraint across every layer.</p>
+                <ul class="component-list">
+                    <li><span class="icon">🔄</span> <span><strong>Rotating Identity</strong> — Public key rotates every ~15 min; BLE address changes daily → prevents persistent tracking</span></li>
+                    <li><span class="icon">🔏</span> <span><strong>End-to-End Encryption</strong> — ECIES with P-224; Apple is a blind relay. Even with full server access, locations are unreadable</span></li>
+                    <li><span class="icon">🚫</span> <span><strong>Zero-Knowledge Relaying</strong> — Finders send no auth info; Apple logs nothing linking finder ↔ owner</span></li>
+                    <li><span class="icon">🔊</span> <span><strong>Anti-Stalking Safeguards</strong> — Sound alerts after separation, iPhone alerts for unknown tags, Tracker Detect for Android</span></li>
+                    <li><span class="icon">🧮</span> <span><strong>Unlinkable Key Derivation</strong> — dᵢ = uᵢ·d + vᵢ prevents correlating Pᵢ ↔ Pⱼ without the root secret</span></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- DATA FLOW -->
+    <div id="flow" class="panel">
+        <div class="flow-container">
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">1</div>
+                <h4>🏷️ AirTag broadcasts BLE beacon</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Emits 31-byte ADV_IND packet every 2 seconds containing rotating P-224 public key Pᵢ</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> A Kafka producer publishing events to a broadcast topic. The "topic ID" (public key) changes every 15 min so historical events can't be linked.<br><br>
+                    <strong>Packet structure:</strong> Bytes 0–5: Apple company ID + payload type | Bytes 6: Status | Bytes 7–29: 23 bytes of EC P-224 public key | Byte 30: upper 2 bits of first key byte | Byte 31: crypto counter (rotates every 15 min)<br><br>
+                    <strong>Key detail:</strong> The 6-byte BLE random static address is cleverly derived from the first 6 bytes of the public key itself, saving payload space.
+                </div>
+            </div>
+            <div class="flow-arrow"></div>
+
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">2</div>
+                <h4>📶 Nearby Apple device detects signal</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Any of ~1 billion Find My-enabled devices passively scans for FindMy beacon payloads</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> A distributed fleet of consumer/subscriber nodes. Each node runs a background BLE scan service — like a sidecar agent in a service mesh.<br><br>
+                    <strong>Zero-knowledge:</strong> The finder device has no idea who owns the AirTag, what it's attached to, or whether it's in Lost Mode. It only sees an opaque public key.
+                </div>
+            </div>
+            <div class="flow-arrow"></div>
+
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">3</div>
+                <h4>🔐 Finder encrypts its GPS location with Pᵢ</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">ECIES encryption — only the owner's private key dᵢ can decrypt</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> Envelope encryption, like AWS KMS. The finder generates a one-time symmetric key, encrypts the location payload, then encrypts that symmetric key with the AirTag's public key Pᵢ. The result is an opaque ciphertext blob.<br><br>
+                    <strong>Privacy guarantee:</strong> Even the finder can't re-read its own report after sending it — the ephemeral key is discarded.
+                </div>
+            </div>
+            <div class="flow-arrow"></div>
+
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">4</div>
+                <h4>☁️ Encrypted blob sent to Apple's iCloud</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Blob is stored in a key-value store keyed by a hash of Pᵢ — Apple sees nothing</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> A blind message broker / encrypted object store (like S3 with client-side encryption). Apple is the "dumb pipe" — it can route and store blobs but never decrypt them.<br><br>
+                    <strong>No auth headers:</strong> The upload request contains zero authentication. Apple doesn't know who the finder is, and retains no logs correlating finder ↔ owner.
+                </div>
+            </div>
+            <div class="flow-arrow"></div>
+
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">5</div>
+                <h4>📱 Owner queries iCloud for their AirTag</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Find My app derives the current Pᵢ locally, queries iCloud via anonymous proxy</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> The client re-derives the "partition key" from its local key material and issues a lookup — like querying a DHT (distributed hash table) where you need the key to find AND read the value.<br><br>
+                    <strong>Anonymous proxy:</strong> All queries pass through relay servers that strip the requester's identity. Apple cannot correlate who is asking for which key.
+                </div>
+            </div>
+            <div class="flow-arrow"></div>
+
+            <div class="flow-step" onclick="this.classList.toggle('expanded')">
+                <div class="step-num">6</div>
+                <h4>🗝️ Owner decrypts location on-device</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Private key dᵢ (derived from root secret via KDF chain) decrypts → GPS coordinates</p>
+                <div class="detail">
+                    <strong>Software analogy:</strong> Client-side decryption like Signal Protocol's "ratcheting" — each time period has a unique derived key, ensuring forward secrecy. Only the owner's device, which holds the root secret synced via iCloud Keychain, can derive any dᵢ.<br><br>
+                    <strong>Precision Finding (within ~30ft):</strong> If the owner is close enough, UWB ranging activates. On-device ML fuses UWB time-of-flight data with IMU sensors (accelerometer + gyroscope) to render a real-time directional arrow and distance, with haptic feedback intensifying on approach.
+                </div>
+            </div>
+        </div>
+
+        <div class="note-box" style="margin-top: 24px;">
+            <strong>💡 Click any step</strong> to expand the detailed software analogy and technical implementation notes.
+        </div>
+    </div>
+
+    <!-- CRYPTO PROTOCOL -->
+    <div id="crypto" class="panel">
+        <div class="crypto-block">
+            <h4>1. Initialization (Registration)</h4>
+            <p>When AirTag is paired, the owner's iPhone generates:</p>
+            <code>
+EC key pair:  {d, P}  where P = d·G  on curve P-224
+Secret:       SK₀ ← random(256 bits)
+Counter:      i = 0
+            </code>
+            <p>The key pair and SK₀ are synced across the owner's devices via <strong>iCloud Keychain</strong> (E2E encrypted). They are <strong>never sent to Apple</strong>.</p>
+        </div>
+
+        <div class="crypto-block">
+            <h4>2. Key Rotation (~every 15 minutes)</h4>
+            <p>Derive the current symmetric key and then a short-lived key pair:</p>
+            <code>
+SKᵢ  = KDF(SKᵢ₋₁, "update")           // ratchet forward
+(uᵢ, vᵢ) = KDF(SKᵢ, "diversify")      // derive affine coefficients
+
+dᵢ = uᵢ · d + vᵢ   (mod n)            // derived private key
+Pᵢ = uᵢ · P + vᵢ · G                  // derived public key (broadcast in BLE)
+            </code>
+            <p><strong>Unlinkability:</strong> Given Pᵢ and Pⱼ (i ≠ j), it is computationally infeasible to determine they belong to the same device without knowing d or SK₀.</p>
+        </div>
+
+        <div class="crypto-block">
+            <h4>3. Location Encryption (by Finder)</h4>
+            <p>The detecting device performs ECIES (Elliptic Curve Integrated Encryption Scheme):</p>
+            <code>
+1. Generate ephemeral key pair: {e, E = e·G}
+2. Shared secret:  S = e · Pᵢ           // ECDH with AirTag's public key
+3. Derive symmetric key: K = KDF(S)
+4. Encrypt:  C = AES-GCM(K, location || timestamp)
+5. Send to Apple: { hash(Pᵢ), E, C }    // no auth, no identity
+            </code>
+            <p>The finder discards the ephemeral key <code>e</code> immediately — it can never re-read its own report.</p>
+        </div>
+
+        <div class="crypto-block">
+            <h4>4. Location Decryption (by Owner)</h4>
+            <p>The owner's device re-derives the matching private key and decrypts:</p>
+            <code>
+1. Re-derive dᵢ from root secret: SKᵢ → (uᵢ, vᵢ) → dᵢ
+2. Shared secret:  S = dᵢ · E           // ECDH with finder's ephemeral public key
+3. Derive symmetric key: K = KDF(S)
+4. Decrypt:  location || timestamp = AES-GCM⁻¹(K, C)
+5. Plot on map in Find My app
+            </code>
+            <p><strong>Forward secrecy:</strong> Compromising a future SKᵢ doesn't reveal past keys due to the one-way KDF ratchet.</p>
+        </div>
+
+        <div class="note-box">
+            <strong>📄 Source:</strong> <a href="https://support.apple.com/guide/security/find-my-security-sec6cbc80fd0/web" style="color:var(--accent);">Apple Platform Security — Find My Security</a> (official Apple documentation describing the cryptographic protocol).
+        </div>
+    </div>
+
+    <!-- STATE MACHINE -->
+    <div id="state" class="panel">
+        <h3 style="margin-bottom: 16px; font-size: 1.1rem;">AirTag Operating States (Firmware State Machine)</h3>
+        <div class="state-machine">
+            <div class="state-row">
+                <div class="state-dot" style="background: #8b949e;"></div>
+                <div>
+                    <div class="state-name">Not Registered</div>
+                    <div class="state-desc">Brand new or factory-reset. Advertises at 33ms interval awaiting pairing. Uses default BT address.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ owner pairs via iPhone (one-tap setup)</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent2);"></div>
+                <div>
+                    <div class="state-name">Initialization</div>
+                    <div class="state-desc">EC P-224 key pair generated. Root secret SK₀ shared between AirTag and iPhone. Registration to Apple ID.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ key exchange complete</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent);"></div>
+                <div>
+                    <div class="state-name">Connected</div>
+                    <div class="state-desc">Owner's device in BLE range. <strong>No broadcasts occur</strong> — silent mode. BLE connection interval: 1s. Precision Finding available via UWB.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ owner leaves BLE range</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent3);"></div>
+                <div>
+                    <div class="state-name">Disconnected</div>
+                    <div class="state-desc">Broadcasts rotating public key Pᵢ every <strong>2 seconds</strong>. New identity generated upon disconnection. Find My network can now locate it.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ after ~3 days separated</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent4);"></div>
+                <div>
+                    <div class="state-name">Lost</div>
+                    <div class="state-desc">Enters "Waiting for Motion" — samples accelerometer every 10s. On motion → plays 20s sound alert, then silent for 6 hours. Cycle repeats.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ motion detected while in Lost</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent4); animation: pulse 1.5s infinite;"></div>
+                <div>
+                    <div class="state-name">Sound Alert</div>
+                    <div class="state-desc">Speaker plays alert sound for ≤20s of detected motion (~8mA draw). Can also be triggered remotely by owner via Find My. Overrides Precision Finding.</div>
+                </div>
+            </div>
+            <div class="state-transition">↓ owner comes back in range</div>
+
+            <div class="state-row">
+                <div class="state-dot" style="background: var(--accent5);"></div>
+                <div>
+                    <div class="state-name">Precision Finding</div>
+                    <div class="state-desc">UWB ranging activated by owner's U1/U2-equipped iPhone. Transmits UWB pulses every ~60ms. iPhone ML fuses ToF + IMU → directional guidance with haptics.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="note-box" style="margin-top: 20px;">
+            <strong>📄 Source:</strong> <a href="https://adamcatley.com/AirTag.html" style="color:var(--accent);">Adam Catley — Apple AirTag Reverse Engineering</a>
+        </div>
+
+        <style>
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.4; }
+            }
+        </style>
+    </div>
+
+    <!-- SOFTWARE ANALOGIES -->
+    <div id="analogy" class="panel">
+        <h3 style="margin-bottom: 4px; font-size: 1.1rem;">AirTag ↔ Software System Mapping</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">Every AirTag component maps cleanly to a familiar distributed systems concept.</p>
+
+        <table class="analogy-table">
+            <thead>
+                <tr>
+                    <th>AirTag Component</th>
+                    <th>Software Analogy</th>
+                    <th>Why</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>AirTag device</td>
+                    <td><strong>Stateless IoT event producer</strong></td>
+                    <td>Only emits events (BLE beacons); holds no location data itself. Like a Lambda function that fires and forgets.</td>
+                </tr>
+                <tr>
+                    <td>BLE beacon broadcast</td>
+                    <td><strong>Pub/Sub topic publish</strong></td>
+                    <td>Broadcasts to an open "topic" that any subscriber in range can pick up — like Kafka produce with no ACK.</td>
+                </tr>
+                <tr>
+                    <td>~1B Apple devices</td>
+                    <td><strong>Distributed mesh / CDN edge nodes</strong></td>
+                    <td>Globally distributed passive relay fleet. Each node detects, enriches (adds GPS), encrypts, and forwards — like CDN edge servers or a service mesh sidecar fleet.</td>
+                </tr>
+                <tr>
+                    <td>Rotating P-224 public key</td>
+                    <td><strong>Rotating API key / JWT with short TTL</strong></td>
+                    <td>Identity rotates on a schedule to prevent correlation. Like short-lived tokens in OAuth with refresh rotation.</td>
+                </tr>
+                <tr>
+                    <td>ECIES location encryption</td>
+                    <td><strong>Envelope encryption (AWS KMS style)</strong></td>
+                    <td>Encrypt data with a symmetric key, then encrypt that key with the recipient's public key. Finder generates ephemeral key → ECDH → AES-GCM.</td>
+                </tr>
+                <tr>
+                    <td>Apple iCloud backend</td>
+                    <td><strong>Blind relay / encrypted object store</strong></td>
+                    <td>Stores opaque blobs keyed by hash(Pᵢ). Cannot decrypt contents. Like S3 with client-side encryption + zero-knowledge access.</td>
+                </tr>
+                <tr>
+                    <td>iCloud Keychain sync</td>
+                    <td><strong>Distributed secret manager</strong></td>
+                    <td>Syncs root key material across owner's devices with E2E encryption — like HashiCorp Vault replication with transit encryption.</td>
+                </tr>
+                <tr>
+                    <td>KDF key ratchet</td>
+                    <td><strong>Signal Protocol double ratchet</strong></td>
+                    <td>One-way KDF chain ensures forward secrecy. Compromising future key doesn't reveal past keys.</td>
+                </tr>
+                <tr>
+                    <td>Precision Finding (UWB + ML)</td>
+                    <td><strong>Edge ML inference pipeline</strong></td>
+                    <td>Sensor fusion (UWB ToF + accelerometer + gyroscope) processed by on-device ML model → real-time UI. All inference local, zero network latency.</td>
+                </tr>
+                <tr>
+                    <td>Anti-stalking alerts</td>
+                    <td><strong>Distributed anomaly detection</strong></td>
+                    <td>Each iPhone runs a local anomaly detector: "is an unknown AirTag correlating with my movement over time?" Like a fleet-wide IDS/IPS system.</td>
+                </tr>
+                <tr>
+                    <td>Lost Mode NFC tap</td>
+                    <td><strong>QR code → deep link resolver</strong></td>
+                    <td>NFC tap serves a URL (found.apple.com) that resolves to owner's contact info. Like scanning a QR code that opens a specific API endpoint.</td>
+                </tr>
+                <tr>
+                    <td>Find My app</td>
+                    <td><strong>Thick client / offline-first app</strong></td>
+                    <td>All crypto and rendering happens client-side. Server is just a blob store. Like an offline-first app with local-first data and sync.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="note-box" style="margin-top: 20px;">
+            <strong>🏗️ Architecture pattern:</strong> AirTag is fundamentally a <strong>zero-knowledge, crowdsourced, event-driven location system</strong> — combining patterns from pub/sub messaging, client-side encryption, distributed hash tables, sensor fusion ML at the edge, and anonymous relay networks (like Tor's onion routing, but for location data).
+        </div>
+    </div>
+
+    <script>
+        function switchTab(id) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            document.querySelectorAll('.tab').forEach(t => {
+                if (t.getAttribute('onclick').includes(id)) t.classList.add('active');
+            });
+        }
+    </script>
+</body>
+</html>
